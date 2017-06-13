@@ -52,6 +52,7 @@ contract Crowdsale is owned {
     State public state = State.Disabled;
     event NewState(State state);
     uint public crowdsaleFinishTime;
+    uint public crowdsaleStartTime;
 
     modifier enabledState {
         if (state != State.Enabled) throw;
@@ -68,7 +69,17 @@ contract Crowdsale is owned {
     function () payable {
         if (state == State.Disabled) throw;
         if (state == State.Crowdsale) {
-            uint256 tokens = 1000 * msg.value / 1000000000000000000;
+            uint256 tokensPerEther;
+            if (msg.value >= 300 ether) {
+                tokensPerEther = 1750;
+            } else if (now < crowdsaleStartTime + 1 days) {
+                tokensPerEther = 1500;
+            } else if (now < crowdsaleStartTime + 1 weeks) {
+                tokensPerEther = 1250;
+            } else {
+                tokensPerEther = 1000;
+            }
+            uint256 tokens = tokensPerEther * msg.value / 1000000000000000000;
             if (holders[msg.sender].balance + tokens < holders[msg.sender].balance) throw; // overflow
             holders[msg.sender].balance += tokens;
             totalSupply += tokens;
@@ -80,6 +91,7 @@ contract Crowdsale is owned {
     
     function startCrowdsale() public onlyOwner {
         if (state != State.Disabled) throw;
+        crowdsaleStartTime = now;
         crowdsaleFinishTime = now + 30 days;
         state = State.Crowdsale;
         NewState(state);
@@ -116,6 +128,7 @@ contract Crowdsale is owned {
         }
         delete investors;
         numberOfInvestors = 0;
+        crowdsaleStartTime = 0;
         crowdsaleFinishTime = 0;
         NewState(state);
     }
