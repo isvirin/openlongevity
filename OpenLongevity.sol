@@ -105,11 +105,11 @@ contract Crowdsale is owned {
             t = crowdsaleFinishTime - now;
         }
     }
-    
+
     function finishCrowdsale() public onlyOwner {
         if (state != State.Crowdsale) throw;
         if (now < crowdsaleFinishTime) throw;
-        if (this.balance < 25000 ether) {
+        if (this.balance < 10000 ether) {
             // Crowdsale failed. Need to return ether to investors
             for (uint i = 0; i <  investors.length; ++i) {
                 Investor inv = investors[i];
@@ -120,7 +120,20 @@ contract Crowdsale is owned {
             }
             state = State.Disabled;
         } else {
-            if (!msg.sender.send(20000 ether)) throw;
+            uint withdraw;
+            if (this.balance < 15000 ether) {
+                withdraw = this.balance * 85 / 100;
+            } else if (this.balance < 25000 ether) {
+                withdraw = this.balance * 80 / 100;
+            } else if (this.balance < 35000 ether) {
+                withdraw = this.balance * 75 / 100;
+            } else if (this.balance < 45000 ether) {
+                withdraw = this.balance * 70 / 100;
+            } else {
+                withdraw = 13500 ether + (this.balance - 45000 ether);
+            }
+            if (!msg.sender.send(withdraw)) throw;
+            
             // Emit additional tokens for owner (20% of complete totalSupply)
             holders[msg.sender].balance = totalSupply / 4;
             totalSupply += totalSupply / 4;
@@ -359,7 +372,7 @@ contract OpenLongevity is Token {
     
     function paymentForService(uint _service, uint _any) payable enabledState public {
         uint rewardPercent = 5;
-        if (now > crowdsaleFinishTime) {
+        if (now > crowdsaleFinishTime + 3 years) {
             rewardPercent = 20;
         } else if (now > crowdsaleFinishTime + 2 years) {
             rewardPercent = 15;
