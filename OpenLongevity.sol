@@ -48,7 +48,7 @@ contract Crowdsale is owned {
     }
     mapping (address => TokenHolder) public holders;
 
-    enum State { Disabled, Crowdsale, Enabled }
+    enum State { Disabled, PreICO, CompletePreICO, Crowdsale, Enabled }
     State public state = State.Disabled;
     event NewState(State state);
     uint public crowdsaleFinishTime;
@@ -68,8 +68,14 @@ contract Crowdsale is owned {
     
     function () payable {
         if (state == State.Disabled) throw;
-        if (state == State.Crowdsale) {
-            uint256 tokensPerEther;
+        uint256 tokensPerEther;
+        if (state == State.PreICO) {
+            if (msg.value >= 150 ether) {
+                tokensPerEther = 2500;
+            } else {
+                tokensPerEther = 2000;
+            }
+        } else if (state == State.Crowdsale) {
             if (msg.value >= 300 ether) {
                 tokensPerEther = 1750;
             } else if (now < crowdsaleStartTime + 1 days) {
@@ -79,6 +85,8 @@ contract Crowdsale is owned {
             } else {
                 tokensPerEther = 1000;
             }
+        }
+        if (tokensPerEther > 0) {
             uint256 tokens = tokensPerEther * msg.value / 1000000000000000000;
             if (holders[msg.sender].balance + tokens < holders[msg.sender].balance) throw; // overflow
             holders[msg.sender].balance += tokens;
@@ -89,16 +97,21 @@ contract Crowdsale is owned {
         //if (state == State.Enabled) { /* it is donation */ }
     }
     
-    function startCrowdsale() public onlyOwner {
-        if (state != State.Disabled) throw;
+    function startTokensSale() public onlyOwner {
+        if (state != State.Disabled && state != State.CompletePreICO) throw;
         crowdsaleStartTime = now;
-        crowdsaleFinishTime = now + 30 days;
-        state = State.Crowdsale;
+        if (state == State.Disabled) {
+            crowdsaleFinishTime = now + 14 days;
+            state = State.PreICO;
+        } else {
+            crowdsaleFinishTime = now + 30 days;
+            state = State.Crowdsale;
+        }
         NewState(state);
     }
     
-    function timeToFinishCrowdsale() public constant returns(uint t) {
-        if (state != State.Crowdsale) throw;
+    function timeToFinishTokensSale() public constant returns(uint t) {
+        if (state != State.PreICO && state != State.Crowdsale) throw;
         if (now > crowdsaleFinishTime) {
             t = 0;
         } else {
@@ -106,10 +119,11 @@ contract Crowdsale is owned {
         }
     }
 
-    function finishCrowdsale() public onlyOwner {
-        if (state != State.Crowdsale) throw;
+    function finishTokensSale() public onlyOwner {
+        if (state != State.PreICO && state != State.Crowdsale) throw;
         if (now < crowdsaleFinishTime) throw;
-        if (this.balance < 10000 ether) {
+        if ((this.balance < 1000 ether && state == State.PreICO) &&
+            (this.balance < 10000 ether && state == State.Crowdsale)) {
             // Crowdsale failed. Need to return ether to investors
             for (uint i = 0; i <  investors.length; ++i) {
                 Investor inv = investors[i];
@@ -118,31 +132,37 @@ contract Crowdsale is owned {
                 delete holders[inv.investor];
                 if(!investor.send(amount)) throw;
             }
-            state = State.Disabled;
+            if (state == State.PreICO) {
+                state = State.Disabled;
+            } else {
+                state = State.CompletePreICO;
+            }
         } else {
             uint withdraw;
-            if (this.balance < 15000 ether) {
-                withdraw = this.balance * 85 / 100;
-            } else if (this.balance < 25000 ether) {
-                withdraw = this.balance * 80 / 100;
-            } else if (this.balance < 35000 ether) {
-                withdraw = this.balance * 75 / 100;
-            } else if (this.balance < 45000 ether) {
-                withdraw = this.balance * 70 / 100;
-            } else {
-                withdraw = 13500 ether + (this.balance - 45000 ether);
+            if (state == State.PreICO) {
+                withdraw = this.balance;
+                state = State.CompletePreICO;
+            } else if (state == State.Crowdsale) {
+                if (this.balance < 15000 ether) {
+                    withdraw = this.balance * 85 / 100;
+                } else if (this.balance < 25000 ether) {
+                    withdraw = this.balance * 80 / 100;
+                } else if (this.balance < 35000 ether) {
+                    withdraw = this.balance * 75 / 100;
+                } else if (this.balance < 45000 ether) {
+                    withdraw = this.balance * 70 / 100;
+                } else {
+                    withdraw = 13500 ether + (this.balance - 45000 ether);
+                }
+                state = State.Enabled;
+                // Emit additional tokens for owner (20% of complete totalSupply)
+                holders[msg.sender].balance = totalSupply / 4;
+                totalSupply += totalSupply / 4;
             }
             if (!msg.sender.send(withdraw)) throw;
-            
-            // Emit additional tokens for owner (20% of complete totalSupply)
-            holders[msg.sender].balance = totalSupply / 4;
-            totalSupply += totalSupply / 4;
-            state = State.Enabled;
+            NewState(state);
         }
         delete investors;
-        numberOfInvestors = 0;
-        crowdsaleStartTime = 0;
-        crowdsaleFinishTime = 0;
         NewState(state);
     }
 }
