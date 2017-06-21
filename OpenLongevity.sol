@@ -39,14 +39,7 @@ contract owned {
 contract Crowdsale is owned {
     
     uint256 public totalSupply = 0;
-
-    struct TokenHolder {
-        uint256 balance;
-        uint256 balanceHold;
-        uint    balanceUpdateTime;
-        uint    rewardWithdrawTime;
-    }
-    mapping (address => TokenHolder) public holders;
+    mapping (address => uint256) public balanceOf;
 
     enum State { Disabled, PreICO, CompletePreICO, Crowdsale, Enabled }
     State public state = State.Disabled;
@@ -88,8 +81,8 @@ contract Crowdsale is owned {
         }
         if (tokensPerEther > 0) {
             uint256 tokens = tokensPerEther * msg.value / 1000000000000000000;
-            if (holders[msg.sender].balance + tokens < holders[msg.sender].balance) throw; // overflow
-            holders[msg.sender].balance += tokens;
+            if (balanceOf[msg.sender] + tokens < balanceOf[msg.sender]) throw; // overflow
+            balanceOf[msg.sender] += tokens;
             totalSupply += tokens;
             numberOfInvestors = investors.length++;
             investors[numberOfInvestors] = Investor({investor: msg.sender, amount: msg.value});
@@ -129,7 +122,7 @@ contract Crowdsale is owned {
                 Investor inv = investors[i];
                 uint amount = inv.amount;
                 address investor = inv.investor;
-                delete holders[inv.investor];
+                balanceOf[inv.investor] = 0;
                 if(!investor.send(amount)) throw;
             }
             if (state == State.PreICO) {
@@ -156,7 +149,7 @@ contract Crowdsale is owned {
                 }
                 state = State.Enabled;
                 // Emit additional tokens for owner (20% of complete totalSupply)
-                holders[msg.sender].balance = totalSupply / 4;
+                balanceOf[msg.sender] = totalSupply / 4;
                 totalSupply += totalSupply / 4;
             }
             if (!msg.sender.send(withdraw)) throw;
@@ -174,14 +167,8 @@ contract Token is Crowdsale {
     string  public symbol      = "Y";
     uint8   public decimals    = 0;
 
-    uint lastDivideRewardTime;
-    uint totalForWithdraw;
-    uint restForWithdraw;
-
-    uint totalReward;
-
     modifier onlyTokenHolders {
-        if (balanceOf(msg.sender) == 0) throw;
+        if (balanceOf[msg.sender] == 0) throw;
         _;
     }
 
@@ -197,36 +184,22 @@ contract Token is Crowdsale {
         _;
     }
 
-    function Token() Crowdsale() {
-        lastDivideRewardTime = now;
-        totalForWithdraw = 0;
-        restForWithdraw = 0;
-        totalReward = 0;
-    }
+    function Token() Crowdsale() {}
 
-    function balanceOf(address _owner) public constant
-        returns (uint256 balance) {
-        return holders[_owner].balance;
-    }
-    
     function transfer(address _to, uint256 _value) public noEther enabledState {
-        if (holders[msg.sender].balance < _value) throw;
-        if (holders[_to].balance + _value < holders[_to].balance) throw; // overflow
-        beforeBalanceChanges(msg.sender);
-        beforeBalanceChanges(_to);
-        holders[msg.sender].balance -= _value;
-        holders[_to].balance += _value;
+        if (balanceOf[msg.sender] < _value) throw;
+        if (balanceOf[_to] + _value < balanceOf[_to]) throw; // overflow
+        balanceOf[msg.sender] -= _value;
+        balanceOf[_to] += _value;
         Transfer(msg.sender, _to, _value);
     }
     
     function transferFrom(address _from, address _to, uint256 _value) public noEther {
-        if (holders[_from].balance < _value) throw;
-        if (holders[_to].balance + _value < holders[_to].balance) throw; // overflow
+        if (balanceOf[_from] < _value) throw;
+        if (balanceOf[_to] + _value < balanceOf[_to]) throw; // overflow
         if (allowed[_from][msg.sender] < _value) throw;
-        beforeBalanceChanges(_from);
-        beforeBalanceChanges(_to);
-        holders[_from].balance -= _value;
-        holders[_to].balance += _value;
+        balanceOf[_from] -= _value;
+        balanceOf[_to] += _value;
         allowed[_from][msg.sender] -= _value;
         Transfer(_from, _to, _value);
     }
@@ -243,8 +216,8 @@ contract Token is Crowdsale {
 
     function burn(uint256 _value) public enabledState {
         if (now < crowdsaleFinishTime + 1 years) throw;
-        if (holders[msg.sender].balance < _value || _value <= 0) throw;
-        holders[msg.sender].balance -= _value;
+        if (balanceOf[msg.sender] < _value || _value <= 0) throw;
+        balanceOf[msg.sender] -= _value;
         totalSupply -= _value;
         Burned(msg.sender, _value);
 
@@ -253,56 +226,9 @@ contract Token is Crowdsale {
         if (totalSupply == 0) {
             amount = this.balance;
         } else {
-            amount = this.balance - (totalReward + restForWithdraw);
-            amount = (amount * _value) / totalSupply;
+            amount = (this.balance * _value) / totalSupply;
         }
         if (!msg.sender.send(amount)) throw;
-    }
-    
-    function reward() constant public enabledState returns(uint) {
-        if (holders[msg.sender].rewardWithdrawTime >= lastDivideRewardTime) {
-            return 0;
-        }
-        uint256 balance;
-        if (holders[msg.sender].balanceUpdateTime <= lastDivideRewardTime) {
-            balance = holders[msg.sender].balance;
-        } else {
-            balance = holders[msg.sender].balanceHold;
-        }
-        return totalForWithdraw * balance / totalSupply;
-    }
-
-    function withdrawReward() public enabledState returns(uint) {
-        uint value = reward();
-        if (value == 0) {
-            return 0;
-        }
-        if (!msg.sender.send(value)) {
-            return 0;
-        }
-        if (holders[msg.sender].balance == 0) {
-            delete holders[msg.sender];
-        } else {
-            holders[msg.sender].rewardWithdrawTime = now;
-        }
-        return value;
-    }
-
-    function divideUpReward() enabledState onlyTokenHolders public {
-        if (holders[msg.sender].balance == 0) throw;
-        if (lastDivideRewardTime + 90 days > now) throw;
-        restForWithdraw += totalReward;
-        totalForWithdraw = restForWithdraw;
-        totalReward = 0;
-        lastDivideRewardTime = now;
-        DivideUpReward(totalForWithdraw);
-    }
-    
-    function beforeBalanceChanges(address _who) enabledState private {
-        if (holders[_who].balanceUpdateTime <= lastDivideRewardTime) {
-            holders[_who].balanceUpdateTime = now;
-            holders[_who].balanceHold = holders[_who].balance;
-        }
     }
 }
 
@@ -331,8 +257,8 @@ contract OpenLongevity is Token {
     mapping (address => Project) public projects;
 
     function deployProject(uint _weiReqFund, string _urlInfo) public payable enabledState {
-        if (msg.value < 1 ether && balanceOf(msg.sender)*1000/totalSupply < 1) throw;
-        if (_weiReqFund <= 0 && _weiReqFund > (this.balance - totalReward - restForWithdraw)) throw;
+        if (msg.value < 1 ether && balanceOf[msg.sender]*1000/totalSupply < 1) throw;
+        if (_weiReqFund <= 0 && _weiReqFund > this.balance) throw;
         if (projects[msg.sender].weiReqFund > 0) throw;
         projects[msg.sender].weiReqFund = _weiReqFund;
         projects[msg.sender].urlInfo = _urlInfo;
@@ -366,14 +292,14 @@ contract OpenLongevity is Token {
 
     function finishVoting(address _projectOwner) public enabledState returns (bool _inSupport) {
         Project p = projects[_projectOwner];
-        if (now < p.votingDeadline || p.weiReqFund > (this.balance - totalReward - restForWithdraw)) throw;
+        if (now < p.votingDeadline || p.weiReqFund > this.balance) throw;
 
         uint yea = 0;
         uint nay = 0;
 
         for (uint i = 0; i <  p.votes.length; ++i) {
             Vote v = p.votes[i];
-            uint voteWeight = balanceOf(v.voter);
+            uint voteWeight = balanceOf[v.voter];
             if (v.inSupport) {
                 yea += voteWeight;
             } else {
@@ -392,16 +318,6 @@ contract OpenLongevity is Token {
     }
     
     function paymentForService(uint _service, uint _any) payable enabledState public {
-        uint rewardPercent = 5;
-        if (now > crowdsaleFinishTime + 3 years) {
-            rewardPercent = 20;
-        } else if (now > crowdsaleFinishTime + 2 years) {
-            rewardPercent = 15;
-        } else if (now > crowdsaleFinishTime + 1 years) {
-            rewardPercent = 10;
-        }
-        uint reward = msg.value * rewardPercent / 100;
-        totalReward += reward;        
         Payment(_service, _any, msg.sender, msg.value);
     }
 }
