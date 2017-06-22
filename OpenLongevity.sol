@@ -26,12 +26,12 @@ contract owned {
     }
     
     modifier onlyOwner {
-        if (owner != msg.sender) throw;
+        require(owner == msg.sender);
         _;
     }
 
     function changeOwner(address _owner) onlyOwner public {
-        if (_owner == 0) throw;
+        require(_owner != 0);
         owner = _owner;
     }
 }
@@ -48,7 +48,7 @@ contract Crowdsale is owned {
     uint public crowdsaleStartTime;
 
     modifier enabledState {
-        if (state != State.Enabled) throw;
+        require(state == State.Enabled);
         _;
     }
 
@@ -60,7 +60,7 @@ contract Crowdsale is owned {
     uint public       numberOfInvestors;
     
     function () payable {
-        if (state == State.Disabled) throw;
+        require(state != State.Disabled);
         uint256 tokensPerEther;
         if (state == State.PreICO) {
             if (msg.value >= 150 ether) {
@@ -91,7 +91,7 @@ contract Crowdsale is owned {
     }
     
     function startTokensSale() public onlyOwner {
-        if (state != State.Disabled && state != State.CompletePreICO) throw;
+        require(state == State.Disabled || state == State.CompletePreICO);
         crowdsaleStartTime = now;
         if (state == State.Disabled) {
             crowdsaleFinishTime = now + 14 days;
@@ -104,7 +104,7 @@ contract Crowdsale is owned {
     }
     
     function timeToFinishTokensSale() public constant returns(uint t) {
-        if (state != State.PreICO && state != State.Crowdsale) throw;
+        require(state == State.PreICO || state == State.Crowdsale);
         if (now > crowdsaleFinishTime) {
             t = 0;
         } else {
@@ -113,8 +113,8 @@ contract Crowdsale is owned {
     }
 
     function finishTokensSale() public onlyOwner {
-        if (state != State.PreICO && state != State.Crowdsale) throw;
-        if (now < crowdsaleFinishTime) throw;
+        require(state == State.PreICO || state == State.Crowdsale);
+        require(now >= crowdsaleFinishTime);
         if ((this.balance < 1000 ether && state == State.PreICO) &&
             (this.balance < 10000 ether && state == State.Crowdsale)) {
             // Crowdsale failed. Need to return ether to investors
@@ -168,7 +168,7 @@ contract Token is Crowdsale {
     uint8   public decimals    = 0;
 
     modifier onlyTokenHolders {
-        if (balanceOf[msg.sender] == 0) throw;
+        require(balanceOf[msg.sender] != 0);
         _;
     }
 
@@ -179,32 +179,27 @@ contract Token is Crowdsale {
     event Burned(address indexed owner, uint256 value);
     event DivideUpReward(uint total);
 
-    modifier noEther() {
-        if (msg.value > 0) throw; 
-        _;
-    }
-
     function Token() Crowdsale() {}
 
-    function transfer(address _to, uint256 _value) public noEther enabledState {
-        if (balanceOf[msg.sender] < _value) throw;
-        if (balanceOf[_to] + _value < balanceOf[_to]) throw; // overflow
+    function transfer(address _to, uint256 _value) public enabledState {
+        require(balanceOf[msg.sender] >= _value);
+        require(balanceOf[_to] + _value >= balanceOf[_to]); // overflow
         balanceOf[msg.sender] -= _value;
         balanceOf[_to] += _value;
         Transfer(msg.sender, _to, _value);
     }
     
-    function transferFrom(address _from, address _to, uint256 _value) public noEther {
-        if (balanceOf[_from] < _value) throw;
-        if (balanceOf[_to] + _value < balanceOf[_to]) throw; // overflow
-        if (allowed[_from][msg.sender] < _value) throw;
+    function transferFrom(address _from, address _to, uint256 _value) public {
+        require(balanceOf[_from] >= _value);
+        require(balanceOf[_to] + _value >= balanceOf[_to]); // overflow
+        require(allowed[_from][msg.sender] >= _value);
         balanceOf[_from] -= _value;
         balanceOf[_to] += _value;
         allowed[_from][msg.sender] -= _value;
         Transfer(_from, _to, _value);
     }
 
-    function approve(address _spender, uint256 _value) public noEther enabledState {
+    function approve(address _spender, uint256 _value) public enabledState {
         allowed[msg.sender][_spender] = _value;
         Approval(msg.sender, _spender, _value);
     }
@@ -215,8 +210,8 @@ contract Token is Crowdsale {
     }
 
     function burn(uint256 _value) public enabledState {
-        if (now < crowdsaleFinishTime + 1 years) throw;
-        if (balanceOf[msg.sender] < _value || _value <= 0) throw;
+        require(now >= crowdsaleFinishTime + 1 years);
+        require(balanceOf[msg.sender] >= _value);
         balanceOf[msg.sender] -= _value;
         totalSupply -= _value;
         Burned(msg.sender, _value);
@@ -257,9 +252,9 @@ contract OpenLongevity is Token {
     mapping (address => Project) public projects;
 
     function deployProject(uint _weiReqFund, string _urlInfo) public payable enabledState {
-        if (msg.value < 1 ether && balanceOf[msg.sender]*1000/totalSupply < 1) throw;
-        if (_weiReqFund <= 0 && _weiReqFund > this.balance) throw;
-        if (projects[msg.sender].weiReqFund > 0) throw;
+        require(msg.value >= 1 ether || balanceOf[msg.sender]*1000/totalSupply >= 1);
+        require(_weiReqFund > 0 && _weiReqFund <= this.balance);
+        require(projects[msg.sender].weiReqFund == 0);
         projects[msg.sender].weiReqFund = _weiReqFund;
         projects[msg.sender].urlInfo = _urlInfo;
         projects[msg.sender].votingDeadline = now + 7 days;
@@ -280,8 +275,8 @@ contract OpenLongevity is Token {
     function vote(address _projectOwner, bool _inSupport) public onlyTokenHolders enabledState
         returns (uint voteId) {
         Project p = projects[_projectOwner];
-        if (p.voted[msg.sender] == true) throw;
-        if (p.votingDeadline <= now) throw;
+        require(p.voted[msg.sender] != true);
+        require(p.votingDeadline > now);
         voteId = p.votes.length++;
         p.votes[voteId] = Vote({inSupport: _inSupport, voter: msg.sender});
         p.voted[msg.sender] = true;
@@ -292,7 +287,7 @@ contract OpenLongevity is Token {
 
     function finishVoting(address _projectOwner) public enabledState returns (bool _inSupport) {
         Project p = projects[_projectOwner];
-        if (now < p.votingDeadline || p.weiReqFund > this.balance) throw;
+        require(now >= p.votingDeadline && p.weiReqFund <= this.balance);
 
         uint yea = 0;
         uint nay = 0;
