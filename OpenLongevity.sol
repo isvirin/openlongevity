@@ -13,15 +13,19 @@ GNU lesser General Public License for more details.
 
 You should have received a copy of the GNU lesser General Public License
 along with the Open Longevity Contract. If not, see <http://www.gnu.org/licenses/>.
+
+@author Ilya Svirin <i.svirin@nordavind.ru>
 */
 
 
 pragma solidity ^0.4.0;
 
 contract owned {
-    address public owner;
 
-    function owned() {
+    address public owner;
+    address public newOwner;
+
+    function owned() payable {
         owner = msg.sender;
     }
     
@@ -32,73 +36,113 @@ contract owned {
 
     function changeOwner(address _owner) onlyOwner public {
         require(_owner != 0);
-        owner = _owner;
+        newOwner = _owner;
+    }
+    
+    function confirmOwner() public {
+        require(newOwner == msg.sender);
+        owner = newOwner;
+        delete newOwner;
     }
 }
 
 contract Crowdsale is owned {
     
-    uint256 public totalSupply = 0;
+    uint256 public totalSupply;
     mapping (address => uint256) public balanceOf;
 
-    enum State { Disabled, PreICO, CompletePreICO, Crowdsale, Enabled }
-    State public state = State.Disabled;
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    uint    public etherPrice;
+    address public crowdsaleOwner;
+    uint    public totalLimitUSD;
+    uint    public minimalSuccessUSD;
+    uint    public collectedUSD;
+
+    enum State { Disabled, PreICO, CompletePreICO, Crowdsale, Enabled, Migration }
     event NewState(State state);
-    uint public crowdsaleFinishTime;
-    uint public crowdsaleStartTime;
+    State   public state = State.Disabled;
+    uint    public crowdsaleStartTime;
+    uint    public crowdsaleFinishTime;
 
     modifier enabledState {
         require(state == State.Enabled);
         _;
     }
 
-    struct Investor {
-        address investor;
-        uint    amount;
+    modifier enabledOrMigrationState {
+        require(state == State.Enabled || state == State.Migration);
+        _;
     }
-    Investor[] public investors;
-    uint public       numberOfInvestors;
+
+    struct Investor {
+        uint256 amountTokens;
+        uint    amountWei;
+    }
+    mapping (address => Investor) public investors;
+    mapping (uint => address)     public investorsIter;
+    uint                          public numberOfInvestors;
     
     function () payable {
-        require(state != State.Disabled);
-        uint256 tokensPerEther;
+        require(state == State.PreICO || state == State.Crowdsale);
+        uint256 tokensPer10USD = 100;
+        uint valueWei = msg.value;
+        uint valueUSD = valueWei * etherPrice / 1000000000000000000;
         if (state == State.PreICO) {
-            if (msg.value >= 150 ether) {
-                tokensPerEther = 2500;
+            if (valueUSD >= 100000) {
+                tokensPer10USD = 175;
             } else {
-                tokensPerEther = 2000;
+                tokensPer10USD = 150;
             }
         } else if (state == State.Crowdsale) {
-            if (msg.value >= 300 ether) {
-                tokensPerEther = 1750;
-            } else if (now < crowdsaleStartTime + 1 days) {
-                tokensPerEther = 1500;
+            if (now < crowdsaleStartTime + 1 days || valueUSD >= 100000) {
+                tokensPer10USD = 125;
             } else if (now < crowdsaleStartTime + 1 weeks) {
-                tokensPerEther = 1250;
-            } else {
-                tokensPerEther = 1000;
+                tokensPer10USD = 110;
             }
         }
-        if (tokensPerEther > 0) {
-            uint256 tokens = tokensPerEther * msg.value / 1000000000000000000;
-            if (balanceOf[msg.sender] + tokens < balanceOf[msg.sender]) throw; // overflow
-            balanceOf[msg.sender] += tokens;
-            totalSupply += tokens;
-            numberOfInvestors = investors.length++;
-            investors[numberOfInvestors] = Investor({investor: msg.sender, amount: msg.value});
+
+        if (collectedUSD + valueUSD > totalLimitUSD) { // don't need so much ether
+            valueUSD = totalLimitUSD - collectedUSD;
+            valueWei = valueUSD * 1000000000000000000 / etherPrice;
+            msg.sender.transfer(msg.value - valueWei);
+            collectedUSD = totalLimitUSD; // to be sure!
+        } else {
+            collectedUSD += valueUSD;
         }
-        //if (state == State.Enabled) { /* it is donation */ }
+        
+        uint256 tokens = tokensPer10USD * valueUSD / 10;
+        require(balanceOf[msg.sender] + tokens > balanceOf[msg.sender]); // overflow
+        require(tokens > 0);
+            
+        Investor storage inv = investors[msg.sender];
+        if (inv.amountWei == 0) { // new investor
+            investorsIter[numberOfInvestors++] = msg.sender;
+        }
+        inv.amountTokens += tokens;
+        inv.amountWei += valueWei;
+        balanceOf[msg.sender] += tokens;
+        totalSupply += tokens;
+        Transfer(this, msg.sender, tokens);
     }
     
-    function startTokensSale() public onlyOwner {
+    function startTokensSale(address _crowdsaleOwner, uint _etherPrice) public onlyOwner {
         require(state == State.Disabled || state == State.CompletePreICO);
         crowdsaleStartTime = now;
+        crowdsaleOwner = _crowdsaleOwner;
+        etherPrice = _etherPrice;
+        delete numberOfInvestors;
+        delete collectedUSD;
         if (state == State.Disabled) {
             crowdsaleFinishTime = now + 14 days;
             state = State.PreICO;
+            totalLimitUSD = 1000000;
+            minimalSuccessUSD = 0;
         } else {
             crowdsaleFinishTime = now + 30 days;
             state = State.Crowdsale;
+            totalLimitUSD = 99750000;
+            minimalSuccessUSD = 7000000;
         }
         NewState(state);
     }
@@ -111,19 +155,23 @@ contract Crowdsale is owned {
             t = crowdsaleFinishTime - now;
         }
     }
-
-    function finishTokensSale() public onlyOwner {
+    
+    function finishTokensSale(uint _investorsToProcess) public {
         require(state == State.PreICO || state == State.Crowdsale);
-        require(now >= crowdsaleFinishTime);
-        if ((this.balance < 1000 ether && state == State.PreICO) &&
-            (this.balance < 10000 ether && state == State.Crowdsale)) {
-            // Crowdsale failed. Need to return ether to investors
-            for (uint i = 0; i <  investors.length; ++i) {
-                Investor inv = investors[i];
-                uint amount = inv.amount;
-                address investor = inv.investor;
-                balanceOf[inv.investor] = 0;
-                if(!investor.send(amount)) throw;
+        require(now >= crowdsaleFinishTime || collectedUSD == totalLimitUSD);
+        if (collectedUSD < minimalSuccessUSD) {
+            // Investors can get their ether calling withdrawBack() function
+            while (_investorsToProcess > 0 && numberOfInvestors > 0) {
+                address addr = investorsIter[--numberOfInvestors];
+                Investor memory inv = investors[addr];
+                balanceOf[addr] -= inv.amountTokens;
+                totalSupply -= inv.amountTokens;
+                Transfer(addr, this, inv.amountTokens);
+                --_investorsToProcess;
+                delete investorsIter[numberOfInvestors];
+            }
+            if (numberOfInvestors > 0) {
+                return;
             }
             if (state == State.PreICO) {
                 state = State.Disabled;
@@ -131,40 +179,50 @@ contract Crowdsale is owned {
                 state = State.CompletePreICO;
             }
         } else {
-            uint withdraw;
-            if (state == State.PreICO) {
-                withdraw = this.balance;
-                state = State.CompletePreICO;
-            } else if (state == State.Crowdsale) {
-                if (this.balance < 15000 ether) {
-                    withdraw = this.balance * 85 / 100;
-                } else if (this.balance < 25000 ether) {
-                    withdraw = this.balance * 80 / 100;
-                } else if (this.balance < 35000 ether) {
-                    withdraw = this.balance * 75 / 100;
-                } else if (this.balance < 45000 ether) {
-                    withdraw = this.balance * 70 / 100;
-                } else {
-                    withdraw = 13500 ether + (this.balance - 45000 ether);
-                }
-                state = State.Enabled;
-                // Emit additional tokens for owner (20% of complete totalSupply)
-                balanceOf[msg.sender] = totalSupply / 4;
-                totalSupply += totalSupply / 4;
+            while (_investorsToProcess > 0 && numberOfInvestors > 0) {
+                --numberOfInvestors;
+                --_investorsToProcess;
+                delete investors[investorsIter[numberOfInvestors]];
+                delete investorsIter[numberOfInvestors];
             }
-            if (!msg.sender.send(withdraw)) throw;
-            NewState(state);
+            if (numberOfInvestors > 0) {
+                return;
+            }
+            crowdsaleOwner.transfer(this.balance);
+            if (state == State.PreICO) {
+                state = State.CompletePreICO;
+            } else {
+                uint256 extraEmission = 2 * totalSupply / 5;
+                balanceOf[crowdsaleOwner] = extraEmission;
+                Transfer(this, crowdsaleOwner, extraEmission);
+
+                extraEmission = 3 * totalSupply / 5;
+                balanceOf[this] = extraEmission;
+                Transfer(this, this, extraEmission);
+
+                totalSupply *= 2;
+                state = State.Enabled;
+            }
         }
-        delete investors;
         NewState(state);
+    }
+    
+    // This function must be called by token holder in case of crowdsale failed
+    function withdrawBack() public {
+        require(state == State.Disabled || state == State.CompletePreICO);
+        uint value = investors[msg.sender].amountWei;
+        if (value > 0) {
+            delete investors[msg.sender];
+            msg.sender.transfer(value);
+        }
     }
 }
 
 contract Token is Crowdsale {
     
     string  public standard    = 'Token 0.1';
-    string  public name        = 'YEAR';
-    string  public symbol      = "Y";
+    string  public name        = 'OpenLongevity';
+    string  public symbol      = "YEAR";
     uint8   public decimals    = 0;
 
     modifier onlyTokenHolders {
@@ -174,12 +232,9 @@ contract Token is Crowdsale {
 
     mapping (address => mapping (address => uint256)) public allowed;
 
-    event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
-    event Burned(address indexed owner, uint256 value);
-    event DivideUpReward(uint total);
 
-    function Token() Crowdsale() {}
+    function Token() payable Crowdsale() {}
 
     function transfer(address _to, uint256 _value) public enabledState {
         require(balanceOf[msg.sender] >= _value);
@@ -189,7 +244,7 @@ contract Token is Crowdsale {
         Transfer(msg.sender, _to, _value);
     }
     
-    function transferFrom(address _from, address _to, uint256 _value) public {
+    function transferFrom(address _from, address _to, uint256 _value) public enabledState {
         require(balanceOf[_from] >= _value);
         require(balanceOf[_to] + _value >= balanceOf[_to]); // overflow
         require(allowed[_from][msg.sender] >= _value);
@@ -208,63 +263,83 @@ contract Token is Crowdsale {
         returns (uint256 remaining) {
         return allowed[_owner][_spender];
     }
+}
 
-    function burn(uint256 _value) public enabledState {
-        require(now >= crowdsaleFinishTime + 1 years);
-        require(balanceOf[msg.sender] >= _value);
+contract MigrationAgent {
+    function migrateFrom(address _from, uint256 _value);
+}
+
+contract TokenMigration is Token {
+    
+    address public migrationAgent;
+    uint256 public totalMigrated;
+
+    event Migrate(address indexed from, address indexed to, uint256 value);
+
+    function TokenMigration() payable Token() {}
+
+    // Migrate _value of tokens to the new token contract
+    function migrate(uint256 _value) external {
+        require(state == State.Migration);
+        require(migrationAgent != 0);
+        require(_value != 0);
+        require(_value <= balanceOf[msg.sender]);
         balanceOf[msg.sender] -= _value;
         totalSupply -= _value;
-        Burned(msg.sender, _value);
+        totalMigrated += _value;
+        MigrationAgent(migrationAgent).migrateFrom(msg.sender, _value);
+        Migrate(msg.sender, migrationAgent, _value);
+    }
 
-        // Send ether to caller
-        uint amount;
-        if (totalSupply == 0) {
-            amount = this.balance;
-        } else {
-            amount = (this.balance * _value) / totalSupply;
-        }
-        if (!msg.sender.send(amount)) throw;
+    function setMigrationAgent(address _agent) external onlyOwner {
+        require(migrationAgent == 0);
+        migrationAgent = _agent;
+        state = State.Migration;
     }
 }
 
-contract OpenLongevity is Token {
+contract OpenLongevity is TokenMigration {
 
-    function OpenLongevity() Token() {}
+    enum Vote { NoVote, VoteYea, VoteNay }
+    uint public deploymentPriceYear = 1;
 
-    event Deployed(address indexed projectOwner, uint weiReqFund, string urlInfo);
+    function OpenLongevity() payable TokenMigration() {}
+
+    event Deployed(address indexed projectOwner, uint proofReqFund, string urlInfo);
     event Voted(address indexed projectOwner, address indexed voter, bool inSupport);
     event VotingFinished(address indexed projectOwner, bool inSupport);
-    event Payment(uint service, uint any, address indexed client, uint amount);
-
-    struct Vote {
-        bool    inSupport;
-        address voter;
-    }
 
     struct Project {
-        uint   weiReqFund;
+        uint   yearReqFund;
         string urlInfo;
         uint   votingDeadline;
-        Vote[] votes;
-        mapping (address => bool) voted;
         uint   numberOfVotes;
+        uint   yea;
+        uint   nay;
+        mapping (address => Vote) votes;
+        mapping (uint => address) votesIter;
     }
     mapping (address => Project) public projects;
 
-    function deployProject(uint _weiReqFund, string _urlInfo) public payable enabledState {
-        require(msg.value >= 1 ether || balanceOf[msg.sender]*1000/totalSupply >= 1);
-        require(_weiReqFund > 0 && _weiReqFund <= this.balance);
-        require(projects[msg.sender].weiReqFund == 0);
-        projects[msg.sender].weiReqFund = _weiReqFund;
+    function setDeploymentPriceYear(uint _price) public onlyOwner {
+        deploymentPriceYear = _price;
+    }
+
+    function deployProject(uint _yearReqFund, string _urlInfo) public
+        onlyTokenHolders enabledOrMigrationState {
+        require(_yearReqFund > 0 && _yearReqFund <= balanceOf[this]);
+        require(projects[msg.sender].yearReqFund == 0);
+        transfer(this, deploymentPriceYear);
+        projects[msg.sender].yearReqFund = _yearReqFund;
         projects[msg.sender].urlInfo = _urlInfo;
         projects[msg.sender].votingDeadline = now + 7 days;
-        Deployed(msg.sender, _weiReqFund, _urlInfo);
+        Deployed(msg.sender, _yearReqFund, _urlInfo);
     }
     
-    function projectInfo(address _projectOwner) enabledState public 
-        returns(uint _weiReqFund, string _urlInfo, uint _timeToFinish) {
-        _weiReqFund = projects[_projectOwner].weiReqFund;
-        _urlInfo    = projects[_projectOwner].urlInfo;
+    function projectInfo(address _projectOwner) enabledOrMigrationState constant public 
+        returns(uint _yearReqFund, string _urlInfo, uint _timeToFinish) {
+        _yearReqFund = projects[_projectOwner].yearReqFund;
+        _urlInfo = projects[_projectOwner].urlInfo;
         if (projects[_projectOwner].votingDeadline <= now) {
             _timeToFinish = 0;
         } else {
@@ -272,47 +347,59 @@ contract OpenLongevity is Token {
         }
     }
 
-    function vote(address _projectOwner, bool _inSupport) public onlyTokenHolders enabledState
-        returns (uint voteId) {
-        Project p = projects[_projectOwner];
-        require(p.voted[msg.sender] != true);
+    function vote(address _projectOwner, bool _inSupport) public
+        onlyTokenHolders enabledOrMigrationState returns (uint voteId) {
+        Project storage p = projects[_projectOwner];
+        require(p.yearReqFund > 0);
+        require(p.votes[msg.sender] == Vote.NoVote);
         require(p.votingDeadline > now);
-        voteId = p.votes.length++;
-        p.votes[voteId] = Vote({inSupport: _inSupport, voter: msg.sender});
-        p.voted[msg.sender] = true;
-        p.numberOfVotes = voteId + 1;
+        voteId = p.numberOfVotes++;
+        p.votesIter[voteId] = msg.sender;
+        if (_inSupport) {
+            p.votes[msg.sender] = Vote.VoteYea;
+        } else {
+            p.votes[msg.sender] = Vote.VoteNay;
+        }
         Voted(_projectOwner, msg.sender, _inSupport); 
         return voteId;
     }
 
-    function finishVoting(address _projectOwner) public enabledState returns (bool _inSupport) {
-        Project p = projects[_projectOwner];
-        require(now >= p.votingDeadline && p.weiReqFund <= this.balance);
+    function finishVoting(address _projectOwner, uint _votesToProcess) public
+        enabledOrMigrationState returns (bool _inSupport) {
+        Project storage p = projects[_projectOwner];
+        require(p.yearReqFund > 0);
+        require(now >= p.votingDeadline && p.yearReqFund <= balanceOf[this]);
 
-        uint yea = 0;
-        uint nay = 0;
-
-        for (uint i = 0; i <  p.votes.length; ++i) {
-            Vote v = p.votes[i];
-            uint voteWeight = balanceOf[v.voter];
-            if (v.inSupport) {
-                yea += voteWeight;
-            } else {
-                nay += voteWeight;
+        while (_votesToProcess > 0 && p.numberOfVotes > 0) {
+            address voter = p.votesIter[--p.numberOfVotes];
+            Vote v = p.votes[voter];
+            uint voteWeight = balanceOf[voter];
+            if (v == Vote.VoteYea) {
+                p.yea += voteWeight;
+            } else if (v == Vote.VoteNay) {
+                p.nay += voteWeight;
             }
+            delete p.votesIter[p.numberOfVotes];
+            delete p.votes[voter];
+            --_votesToProcess;
+        }
+        if (p.numberOfVotes > 0) {
+            _inSupport = false;
+            return;
         }
 
-        _inSupport = (yea > nay);
+        _inSupport = (p.yea > p.nay);
+
+        uint yearReqFund = p.yearReqFund;
+        delete projects[_projectOwner];
 
         if (_inSupport) {
-            if (!_projectOwner.send(p.weiReqFund)) throw;
+            require(balanceOf[_projectOwner] + yearReqFund >= balanceOf[_projectOwner]); // overflow
+            balanceOf[this] -= yearReqFund;
+            balanceOf[_projectOwner] += yearReqFund;
+            Transfer(this, _projectOwner, yearReqFund);
         }
 
         VotingFinished(_projectOwner, _inSupport);
-        delete projects[_projectOwner];
-    }
-    
-    function paymentForService(uint _service, uint _any) payable enabledState public {
-        Payment(_service, _any, msg.sender, msg.value);
     }
 }
