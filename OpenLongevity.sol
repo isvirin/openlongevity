@@ -90,15 +90,15 @@ contract Crowdsale is owned {
         uint valueUSD = valueWei * etherPrice / 1000000000000000000;
         if (state == State.PreICO) {
             if (valueUSD >= 100000) {
-                tokensPer10USD = 175;
+                tokensPer10USD = 200;
             } else {
-                tokensPer10USD = 150;
+                tokensPer10USD = 175;
             }
         } else if (state == State.Crowdsale) {
             if (now < crowdsaleStartTime + 1 days || valueUSD >= 100000) {
-                tokensPer10USD = 125;
+                tokensPer10USD = 150;
             } else if (now < crowdsaleStartTime + 1 weeks) {
-                tokensPer10USD = 110;
+                tokensPer10USD = 125;
             }
         }
 
@@ -308,6 +308,7 @@ contract OpenLongevity is TokenMigration {
     event Deployed(address indexed projectOwner, uint proofReqFund, string urlInfo);
     event Voted(address indexed projectOwner, address indexed voter, bool inSupport);
     event VotingFinished(address indexed projectOwner, bool inSupport);
+    event VotingRejected(address indexed projectOwner);
 
     struct Project {
         uint   yearReqFund;
@@ -362,6 +363,12 @@ contract OpenLongevity is TokenMigration {
         }
         Voted(_projectOwner, msg.sender, _inSupport); 
         return voteId;
+    }
+    
+    function rejectProject(address _projectOwner) public onlyOwner {
+        require(projects[_projectOwner].yearReqFund > 0);
+        delete projects[_projectOwner];
+        VotingRejected(_projectOwner);
     }
 
     function finishVoting(address _projectOwner, uint _votesToProcess) public
