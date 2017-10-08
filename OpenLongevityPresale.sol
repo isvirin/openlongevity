@@ -18,7 +18,7 @@ along with the Open Longevity Contract. If not, see <http://www.gnu.org/licenses
 */
 
 
-pragma solidity ^0.4.0;
+pragma solidity ^0.4.10;
 
 contract owned {
 
@@ -101,7 +101,7 @@ contract Presale is KYC, ERC20 {
     mapping (uint => address)     public investorsIter;
     uint                          public numberOfInvestors;
     
-    function () payable {
+    function () payable public {
         require(state == State.Presale);
         require(now < presaleFinishTime);
         require(now > ppFinishTime || known[msg.sender]);
@@ -152,9 +152,9 @@ contract Presale is KYC, ERC20 {
         presaleOwner = _presaleOwner;
         etherPrice = _etherPrice;
         ppFinishTime = now + 3 days;
-        presaleFinishTime = ppFinishTime + 15 days;
+        presaleFinishTime = ppFinishTime + 60 days;
         state = State.Presale;
-        totalLimitUSD = 1000000;
+        totalLimitUSD = 500000;
         NewState(state);
     }
     
@@ -167,12 +167,16 @@ contract Presale is KYC, ERC20 {
         }
     }
     
-    function finishPresale() public {
+    function finishPresale() public onlyOwner {
         require(state == State.Presale);
         require(now >= presaleFinishTime || collectedUSD == totalLimitUSD);
         require(presaleOwner.call.gas(3000000).value(this.balance)());
         state = State.Finished;
         NewState(state);
+    }
+    
+    function withdraw() public onlyOwner {
+        require(presaleOwner.call.gas(3000000).value(this.balance)());
     }
 }
 
@@ -183,9 +187,9 @@ contract PresaleToken is Presale {
     string  public symbol      = "YEAR";
     uint8   public decimals    = 0;
 
-    function PresaleToken() payable Presale() {}
+    function PresaleToken() payable public Presale() {}
 
-    function balanceOf(address _who) constant returns (uint) {
+    function balanceOf(address _who) constant public returns (uint) {
         return investors[_who].amountTokens;
     }
 
@@ -197,7 +201,7 @@ contract PresaleToken is Presale {
 
 contract OpenLongevityPresale is PresaleToken {
 
-    function OpenLongevityPresale() payable PresaleToken() {}
+    function OpenLongevityPresale() payable public PresaleToken() {}
 
     /**
      * @title Contract will be destroyed after tokens migration to the new contract
