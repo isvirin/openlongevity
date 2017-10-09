@@ -193,19 +193,16 @@ contract PresaleToken is Presale {
         return investors[_who].amountTokens;
     }
 
-    function transfer(address _to, uint256 _value) public {revert();}
-    function transferFrom(address _from, address _to, uint256 _value) public {revert();}
-    function approve(address _spender, uint256 _value) public {revert();}
-    function allowance(address _owner, address _spender) public constant returns (uint256 remaining) {revert();}
+    function transfer(address, uint256) public {revert();}
+    function transferFrom(address, address, uint256) public {revert();}
+    function approve(address, uint256) public {revert();}
+    function allowance(address, address) public constant returns (uint256) {revert();}
 }
 
 contract OpenLongevityPresale is PresaleToken {
 
     function OpenLongevityPresale() payable public PresaleToken() {}
 
-    /**
-     * @title Contract will be destroyed after tokens migration to the new contract
-     */
     function killMe() public onlyOwner {
         selfdestruct(owner);
     }
