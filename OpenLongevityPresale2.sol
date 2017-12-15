@@ -91,14 +91,8 @@ contract Presale is PresaleOriginal {
     function migrate(address _originalContract, uint n) public onlyOwner {
         require(state == State.Disabled);
         
-        // migrate main parameters
-        presaleStartTime = PresaleOriginal(_originalContract).presaleStartTime();
-        collectedUSD = PresaleOriginal(_originalContract).collectedUSD();
-        totalLimitUSD = PresaleOriginal(_originalContract).totalLimitUSD();
-        numberOfInvestors = PresaleOriginal(_originalContract).numberOfInvestors();
-        totalSupply = PresaleOriginal(_originalContract).totalSupply() * 2;
-        
         // migrate tokens with x2 bonus
+        numberOfInvestors = PresaleOriginal(_originalContract).numberOfInvestors();
         uint limit = migrationCounter + n;
         if(limit > numberOfInvestors) {
             limit = numberOfInvestors;
@@ -109,10 +103,21 @@ contract Presale is PresaleOriginal {
             uint256 amountTokens;
             uint amountWei;
             (amountTokens, amountWei) = PresaleOriginal(_originalContract).investors(a);
-            investors[a].amountTokens = amountTokens * 2;
+            amountTokens *= 2;
+            investors[a].amountTokens = amountTokens;
             investors[a].amountWei = amountWei;
+            totalSupply += amountTokens;
+            Transfer(_originalContract, a, amountTokens);
         }
-        
+        if(limit < numberOfInvestors) {
+            return;
+        }
+
+        // migrate main parameters
+        presaleStartTime = PresaleOriginal(_originalContract).presaleStartTime();
+        collectedUSD = PresaleOriginal(_originalContract).collectedUSD();
+        totalLimitUSD = PresaleOriginal(_originalContract).totalLimitUSD();
+
         // add extra tokens for bounty
         address bountyAddress = 0x59B95A5e0268Cc843e6308FEf723544BaA6676c6;
         if(investors[bountyAddress].amountWei == 0 && investors[bountyAddress].amountTokens == 0) {
