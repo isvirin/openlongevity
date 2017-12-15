@@ -86,7 +86,9 @@ contract Presale is PresaleOriginal {
     State   public state;
     uint    public presaleFinishTime;
 
-    function migrate(address _originalContract) public onlyOwner {
+    uint    public migrationCounter;
+
+    function migrate(address _originalContract, uint n) public onlyOwner {
         require(state == State.Disabled);
         
         // migrate main parameters
@@ -97,9 +99,13 @@ contract Presale is PresaleOriginal {
         totalSupply = PresaleOriginal(_originalContract).totalSupply() * 2;
         
         // migrate tokens with x2 bonus
-        for(uint i = 0; i < numberOfInvestors; ++i) {
-            address a = PresaleOriginal(_originalContract).investorsIter(i);
-            investorsIter[i] = a;
+        uint limit = migrationCounter + n;
+        if(limit > numberOfInvestors) {
+            limit = numberOfInvestors;
+        }
+        for(; migrationCounter < limit; ++migrationCounter) {
+            address a = PresaleOriginal(_originalContract).investorsIter(migrationCounter);
+            investorsIter[migrationCounter] = a;
             uint256 amountTokens;
             uint amountWei;
             (amountTokens, amountWei) = PresaleOriginal(_originalContract).investors(a);
