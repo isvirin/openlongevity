@@ -110,7 +110,7 @@ contract Presale is PresaleOriginal {
         // add extra tokens for bounty
         address bountyAddress = 0x59B95A5e0268Cc843e6308FEf723544BaA6676c6;
         if(investors[bountyAddress].amountWei == 0 && investors[bountyAddress].amountTokens == 0) {
-            investorsIter[++numberOfInvestors] = bountyAddress;
+            investorsIter[numberOfInvestors++] = bountyAddress;
         }
         uint bountyTokens = 5 * PresaleOriginal(_originalContract).totalSupply() / 100;
         investors[bountyAddress].amountTokens += bountyTokens;
@@ -214,7 +214,7 @@ contract PresaleToken is Presale {
         require(investors[_to].amountTokens + _value >= investors[_to].amountTokens);
         investors[msg.sender].amountTokens -= _value;
         if(investors[_to].amountTokens == 0 && investors[_to].amountWei == 0) {
-            investorsIter[++numberOfInvestors] = _to;
+            investorsIter[numberOfInvestors++] = _to;
         }
         investors[_to].amountTokens += _value;
         Transfer(msg.sender, _to, _value);
@@ -226,7 +226,7 @@ contract PresaleToken is Presale {
         require(allowed[_from][msg.sender] >= _value);
         investors[_from].amountTokens -= _value;
         if(investors[_to].amountTokens == 0 && investors[_to].amountWei == 0) {
-            investorsIter[++numberOfInvestors] = _to;
+            investorsIter[numberOfInvestors++] = _to;
         }
         investors[_to].amountTokens += _value;
         allowed[_from][msg.sender] -= _value;
